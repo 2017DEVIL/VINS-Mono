@@ -15,18 +15,20 @@
 
 Estimator estimator;
 
-std::condition_variable con;
+std::condition_variable con;//条件变量
 double current_time = -1;
 queue<sensor_msgs::ImuConstPtr> imu_buf;
 queue<sensor_msgs::PointCloudConstPtr> feature_buf;
 queue<sensor_msgs::PointCloudConstPtr> relo_buf;
 int sum_of_wait = 0;
 
+//互斥量
 std::mutex m_buf;
 std::mutex m_state;
 std::mutex i_buf;
 std::mutex m_estimator;
 
+//IMU项[P,Q,B,Ba,Bg,a,g]
 double latest_time;
 Eigen::Vector3d tmp_P;
 Eigen::Quaterniond tmp_Q;
@@ -39,23 +41,29 @@ bool init_feature = 0;
 bool init_imu = 1;
 double last_imu_t = 0;
 
+//从IMU测量值imu_msg和上一个PVQ递推得到下一个tmp_Q，tmp_P，tmp_V，中值积分
 void predict(const sensor_msgs::ImuConstPtr &imu_msg)
 {
     double t = imu_msg->header.stamp.toSec();
+
+    //init_imu=1表示第一个IMU数据
     if (init_imu)
     {
         latest_time = t;
         init_imu = 0;
         return;
     }
+
     double dt = t - latest_time;
     latest_time = t;
 
+    //线加速度
     double dx = imu_msg->linear_acceleration.x;
     double dy = imu_msg->linear_acceleration.y;
     double dz = imu_msg->linear_acceleration.z;
     Eigen::Vector3d linear_acceleration{dx, dy, dz};
 
+    //角加速度
     double rx = imu_msg->angular_velocity.x;
     double ry = imu_msg->angular_velocity.y;
     double rz = imu_msg->angular_velocity.z;
@@ -135,8 +143,10 @@ getMeasurements()
     return measurements;
 }
 
+//imu回调函数，将imu_msg保存到imu_buf，IMU状态递推并发布[P,Q,V,header]
 void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
 {
+    //判断时间间隔是否为正
     if (imu_msg->header.stamp.toSec() <= last_imu_t)
     {
         ROS_WARN("imu message in disorder!");
@@ -147,21 +157,25 @@ void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
     m_buf.lock();
     imu_buf.push(imu_msg);
     m_buf.unlock();
-    con.notify_one();
+
+    con.notify_one();//单问 唤醒作用于process线程中的获取观测值数据的函数（什么意思）
 
     last_imu_t = imu_msg->header.stamp.toSec();
 
     {
+        //构造互斥锁m_state，析构时解锁
         std::lock_guard<std::mutex> lg(m_state);
-        predict(imu_msg);
+        predict(imu_msg);//递推得到IMU的PQV
         std_msgs::Header header = imu_msg->header;
         header.frame_id = "world";
+
+        //发布最新的由IMU直接递推得到的PQV header
         if (estimator.solver_flag == Estimator::SolverFlag::NON_LINEAR)
             pubLatestOdometry(tmp_P, tmp_Q, tmp_V, header);
     }
 }
 
-
+//feature回调函数，将feature_msg放入feature_buf
 void feature_callback(const sensor_msgs::PointCloudConstPtr &feature_msg)
 {
     if (!init_feature)
@@ -170,12 +184,15 @@ void feature_callback(const sensor_msgs::PointCloudConstPtr &feature_msg)
         init_feature = 1;
         return;
     }
+
+
     m_buf.lock();
     feature_buf.push(feature_msg);
     m_buf.unlock();
     con.notify_one();
 }
 
+//restart回调函数，收到restart时清空feature_buf和imu_buf，估计器重置，时间重置
 void restart_callback(const std_msgs::BoolConstPtr &restart_msg)
 {
     if (restart_msg->data == true)
@@ -197,6 +214,7 @@ void restart_callback(const std_msgs::BoolConstPtr &restart_msg)
     return;
 }
 
+//relocalization回调函数，将points_msg放入relo_buf
 void relocalization_callback(const sensor_msgs::PointCloudConstPtr &points_msg)
 {
     //printf("relocalization callback! \n");
@@ -212,6 +230,8 @@ void process()
     {
         std::vector<std::pair<std::vector<sensor_msgs::ImuConstPtr>, sensor_msgs::PointCloudConstPtr>> measurements;
         std::unique_lock<std::mutex> lk(m_buf);
+
+        //等待上面两个接收数据（IMU和Img）完成就会被唤醒
         con.wait(lk, [&]
                  {
             return (measurements = getMeasurements()).size() != 0;
@@ -293,17 +313,30 @@ void process()
             ROS_DEBUG("processing vision data with stamp %f \n", img_msg->header.stamp.toSec());
 
             TicToc t_s;
+
+            //建立每个特征点的(camera_id,[x,y,z,u,v,vx,vy])s的map，索引为feature_id
+
+            //map C++标准数据库中的一个关联容器
+              //第一个元素称为关键字：int特征点的id
+              //第二个元素称为关键值：vector<pair<int, Eigen::Matrix<double, 7, 1>>>：相机的id，特征点的归一化坐标、像素坐标、速度
+              //单目相机的id为0
             map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> image;
             for (unsigned int i = 0; i < img_msg->points.size(); i++)
             {
                 int v = img_msg->channels[0].values[i] + 0.5;
                 int feature_id = v / NUM_OF_CAM;
                 int camera_id = v % NUM_OF_CAM;
+
+                //去畸变后的归一化坐标
                 double x = img_msg->points[i].x;
                 double y = img_msg->points[i].y;
                 double z = img_msg->points[i].z;
+
+                //像素坐标
                 double p_u = img_msg->channels[1].values[i];
                 double p_v = img_msg->channels[2].values[i];
+
+                //去畸变后归一化的坐标速度
                 double velocity_x = img_msg->channels[3].values[i];
                 double velocity_y = img_msg->channels[4].values[i];
                 ROS_ASSERT(z == 1);
@@ -311,7 +344,7 @@ void process()
                 xyz_uv_velocity << x, y, z, p_u, p_v, velocity_x, velocity_y;
                 image[feature_id].emplace_back(camera_id,  xyz_uv_velocity);
             }
-            estimator.processImage(image, img_msg->header);
+            estimator.processImage(image, img_msg->header); //送入processImage函数进行处理
 
             double whole_t = t_s.toc();
             printStatistics(estimator, whole_t);
@@ -340,23 +373,30 @@ void process()
 
 int main(int argc, char **argv)
 {
+    // ROS初始化、设置句柄
     ros::init(argc, argv, "vins_estimator");
     ros::NodeHandle n("~");
     ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info);
+
+    //读取参数，设置状态估计器参数
     readParameters(n);
     estimator.setParameter();
+
 #ifdef EIGEN_DONT_PARALLELIZE
     ROS_DEBUG("EIGEN_DONT_PARALLELIZE");
 #endif
     ROS_WARN("waiting for image and imu...");
 
+    //用于RVIZ显示的Topic以及相机三角锥框初始化
     registerPub(n);
 
+    //订阅IMU、feature、restart、match_points的topic，执行各自回调函数
     ros::Subscriber sub_imu = n.subscribe(IMU_TOPIC, 2000, imu_callback, ros::TransportHints().tcpNoDelay());
     ros::Subscriber sub_image = n.subscribe("/feature_tracker/feature", 2000, feature_callback);
     ros::Subscriber sub_restart = n.subscribe("/feature_tracker/restart", 2000, restart_callback);
     ros::Subscriber sub_relo_points = n.subscribe("/pose_graph/match_points", 2000, relocalization_callback);
 
+    //创建VIO主线程
     std::thread measurement_process{process};
     ros::spin();
 

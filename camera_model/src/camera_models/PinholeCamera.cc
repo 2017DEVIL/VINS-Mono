@@ -454,6 +454,8 @@ PinholeCamera::liftProjective(const Eigen::Vector2d& p, Eigen::Vector3d& P) cons
     //double lambda;
 
     // Lift points to normalised plane
+
+    //将未去过畸变的像素坐标转换到归一化坐标系下（有畸变）
     mx_d = m_inv_K11 * p(0) + m_inv_K13;
     my_d = m_inv_K22 * p(1) + m_inv_K23;
 

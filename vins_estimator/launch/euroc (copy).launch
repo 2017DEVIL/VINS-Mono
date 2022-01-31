@@ -1,0 +1,60 @@
+<!-- 注释格式 -->
+
+<！-- 通过XML文件实现多节点的配置和启动,XML文件的介绍：https://www.zhihu.com/question/31353595 -->
+<！-- vins-mono launch文件解读：https://blog.csdn.net/qq_41839222/article/details/86564879 -->
+<！-- 开头是<launch>，结尾是</launch>，两者不同 -->
+
+<launch>
+
+<！-- <arg>：launch文件内部的局部变量，仅限于launch文件使用 -->
+<！-- 比如<arg name=“arg-name” default=“arg-value”/> -->
+<！-- 参数调用：<param name=“foo” value="$(arg arg-name)"/> -->
+<！-- 第一行的意思是：设置参数名为config_path，他的值是一个路径，路径为$(find feature_tracker)/../config/euroc/euroc_config.yaml -->
+<！-- 第二行的意思是：设置参数名为vins_path，他的值是一个路径，路径为$(find feature_tracker)/../config/../ -->
+<！-- 在parameters.cpp中使用鱼眼相机mask中用到 -->
+
+    <arg name="config_path" default = "$(find `feature_tracker`)/../config/euroc/euroc_config.yaml" />
+	  <arg name="vins_path" default = "$(find feature_tracker)/../config/../" />
+
+<！-- <node>：最常见的标签，用于启动和关闭节点 -->
+<！-- output=“log | screen”(可选) ，默认是log-->
+<！-- 如果为“ screen”，则来自该节点的stdout / stderr将被发送到屏幕。 -->
+<！-- 如果为'log'，则stdout / stderr输出将发送到$ ROS_HOME / log(~/.ros/log)中的日志文件，并且stderr将继续发送到屏幕 -->
+<！-- 节点名称是pose_graph，节点包的名称是pose_graph，节点的类型是pose_graph，输出到屏幕 -->
+<！-- <node>：最常见的标签，用于启动和关闭节点 -->
+
+<！-- <param>：该标签定义要在参数服务器上设置的参数。你可以将<param>标记放在<node>标记内，在这种情况下，该参数被视为私有参数 -->
+<！-- ①name="namespace/name"。参数名称。 命名空间可以包含在参数名称中，但应避免使用全局指定的名称。 -->
+<！-- ②value="value" (可选)。定义参数的值。 如果省略此属性，则必须指定binfile，textfile或command -->
+<！-- ③type="str | int | double | bool | yaml" (可选)。指定参数的类型。 如果未指定类型，roslaunch将尝试自动确定类型 -->
+
+<！-- 启动"feature_tracker"节点，在该节点中需要读取参数文件，地址为config_file，即config_path -->
+
+    <node name="feature_tracker" pkg="feature_tracker" type="feature_tracker" output="log">
+        <param name="config_file" type="string" value="$(arg config_path)" />
+        <param name="vins_folder" type="string" value="$(arg vins_path)" />
+    </node>
+
+<！-- 启动"vins_estimator"节点，在该节点中需要读取参数文件，地址为config_file，即config_path -->
+
+    <node name="vins_estimator" pkg="vins_estimator" type="vins_estimator" output="screen">
+       <param name="config_file" type="string" value="$(arg config_path)" />
+       <param name="vins_folder" type="string" value="$(arg vins_path)" />
+    </node>
+
+
+<！-- 启动"pose_graph"节点，除了参数配置文件的地址外还设置了4个参数 -->
+<！-- visualization_shift_x和visualization_shift_y表示在进行位姿图优化后，对得到的位姿在x坐标和y坐标的偏移量（一般都设为0） -->
+<！-- skip_cnt在pose_graph_node的process()中，表示每隔skip_cnt个图像帧才进行一次处理 -->
+<！-- skip_dis也在pose_graph_node的process()中，目的是将距上一帧的时间间隔超过SKIP_DIS的图像创建为位姿图中的关键帧 -->
+
+
+    <node name="pose_graph" pkg="pose_graph" type="pose_graph" output="screen">
+        <param name="config_file" type="string" value="$(arg config_path)" />
+        <param name="visualization_shift_x" type="int" value="0" />
+        <param name="visualization_shift_y" type="int" value="0" />
+        <param name="skip_cnt" type="int" value="0" />
+        <param name="skip_dis" type="double" value="0" />
+    </node>
+
+</launch>

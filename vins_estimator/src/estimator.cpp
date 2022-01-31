@@ -6,6 +6,7 @@ Estimator::Estimator(): f_manager{Rs}
     clearState();
 }
 
+// 外参，特征管理外参，视觉测量协方差矩阵
 void Estimator::setParameter()
 {
     for (int i = 0; i < NUM_OF_CAM; i++)
@@ -14,6 +15,8 @@ void Estimator::setParameter()
         ric[i] = RIC[i];
     }
     f_manager.setRic(ric);
+
+    //视觉测量残差的协方差矩阵 和焦距有关啊
     ProjectionFactor::sqrt_info = FOCAL_LENGTH / 1.5 * Matrix2d::Identity();
     ProjectionTdFactor::sqrt_info = FOCAL_LENGTH / 1.5 * Matrix2d::Identity();
     td = TD;

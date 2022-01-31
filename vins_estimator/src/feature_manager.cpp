@@ -28,54 +28,73 @@ void FeatureManager::clearState()
 int FeatureManager::getFeatureCount()
 {
     int cnt = 0;
-    for (auto &it : feature)
+    for (auto &it : feature)// 遍历feature
     {
 
-        it.used_num = it.feature_per_frame.size();
+        it.used_num = it.feature_per_frame.size();//单问 我不理解这个是什么意思 所有特征点被观测到的帧数
 
+        // 如果该特征点有两帧以上观测到了  且第一次观测到帧数不是在最后
         if (it.used_num >= 2 && it.start_frame < WINDOW_SIZE - 2)
         {
-            cnt++;
+            cnt++;// 这个特征点是有效的
         }
     }
     return cnt;
 }
 
-
+/**
+ * @brief   把特征点放入feature的list容器中，计算每一个点跟踪次数和它在次新帧和次次新帧间的视差，返回是否是关键帧
+ * @param[in]   frame_count 窗口内帧的个数+1，也表示最新帧索引
+ * @param[in]   image 某帧所有特征点的[camera_id,[x,y,z,u,v,vx,vy]]s构成的map,索引为feature_id
+ * @param[in]   td IMU和cam同步时间差
+ * @return  bool true：次新帧是关键帧;false：非关键帧
+*/
 bool FeatureManager::addFeatureCheckParallax(int frame_count, const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image, double td)
 {
-    ROS_DEBUG("input feature: %d", (int)image.size());
-    ROS_DEBUG("num of feature: %d", getFeatureCount());
+    ROS_DEBUG("input feature: %d", (int)image.size());//特征点数量
+    ROS_DEBUG("num of feature: %d", getFeatureCount());//能够作为特征点的数量
     double parallax_sum = 0;
     int parallax_num = 0;
     last_track_num = 0;
+
+    //把image map中的所有特征点放入feature list容器中
     for (auto &id_pts : image)
     {
+        //新建一个特征，用第0个相机的
         FeaturePerFrame f_per_fra(id_pts.second[0].second, td);
 
-        int feature_id = id_pts.first;
+        int feature_id = id_pts.first; //特征点的id
+
+        //在feature中寻找这个id
         auto it = find_if(feature.begin(), feature.end(), [feature_id](const FeaturePerId &it)
                           {
             return it.feature_id == feature_id;
                           });
 
+//如果没有则新建一个，并添加这图像帧
+//构建特征点与滑动窗口内多帧相机的特征像素点的关系
         if (it == feature.end())
         {
             feature.push_back(FeaturePerId(feature_id, frame_count));
             feature.back().feature_per_frame.push_back(f_per_fra);
         }
+
+        //光流跟踪得到的旧的特征点
         else if (it->feature_id == feature_id)
         {
+            //有的话把图像帧添加进去
             it->feature_per_frame.push_back(f_per_fra);
             last_track_num++;
         }
     }
 
+    //    如果追踪到的点太少
     if (frame_count < 2 || last_track_num < 20)
         return true;
 
     for (auto &it_per_id : feature)
     {
+        //特征点起始帧要在次次新帧或之前，终止帧要在次新帧或之后
         if (it_per_id.start_frame <= frame_count - 2 &&
             it_per_id.start_frame + int(it_per_id.feature_per_frame.size()) - 1 >= frame_count - 1)
         {
@@ -92,6 +111,7 @@ bool FeatureManager::addFeatureCheckParallax(int frame_count, const map<int, vec
     {
         ROS_DEBUG("parallax_sum: %lf, parallax_num: %d", parallax_sum, parallax_num);
         ROS_DEBUG("current parallax: %lf", parallax_sum / parallax_num * FOCAL_LENGTH);
+        //        平均视差大于10 pixel
         return parallax_sum / parallax_num >= MIN_PARALLAX;
     }
 }
